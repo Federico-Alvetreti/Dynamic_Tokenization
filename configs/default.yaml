@@ -1,0 +1,28 @@
+# Default Configurations 
+defaults:
+  - dataset: wikitext_103_raw
+  - model: blt_1b
+  - lora: none
+  - method: attention
+  - optimizer: adam
+
+# Hyperparameters 
+hyperparameters:
+  experiment_name : prova
+  seed: 331
+
+# Set folders for results, datasets and plots 
+core:
+  dataset_path: ./data
+  results_path: ./results
+  plots_path : ./plots
+
+
+# Set default Hydra folder name 
+hydra:
+ run:
+   dir: ${core.results_path}/${hyperparameters.experiment_name}_${hyperparameters.seed}/${dataset.name}/${model.model_name}/${method.name}//params=${method.parameters}
+
+ job_logging:
+   root:
+     level: WARNING

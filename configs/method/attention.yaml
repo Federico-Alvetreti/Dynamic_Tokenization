@@ -1,0 +1,6 @@
+apply:
+  _target_: methods.attention.Model_Wrapper
+  alfa: ${..parameters.alfa}
+name : attention
+parameters:
+  alfa : 0.001

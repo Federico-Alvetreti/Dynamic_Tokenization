@@ -1,0 +1,4 @@
+apply:
+  _target_: methods.base.Model_Wrapper
+name : base
+parameters:

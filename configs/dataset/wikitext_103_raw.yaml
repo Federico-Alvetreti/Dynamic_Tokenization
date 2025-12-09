@@ -1,0 +1,24 @@
+train:
+  _target_: datasets.load_dataset
+  path: "Salesforce/wikitext"
+  name: "wikitext-103-raw-v1"
+  split: "train"
+  cache_dir: ${core.dataset_path}
+
+validation:
+  _target_: datasets.load_dataset
+  path: "Salesforce/wikitext"
+  name: "wikitext-103-raw-v1"
+  split: "validation"
+  cache_dir: ${core.dataset_path}
+
+test:
+  _target_: datasets.load_dataset
+  path: "Salesforce/wikitext"
+  name: "wikitext-103-raw-v1"
+  split: "test"
+  cache_dir: ${core.dataset_path}
+
+batch_size: 1
+seq_length: 16
+name: wikitext103_raw
