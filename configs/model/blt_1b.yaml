@@ -4,6 +4,7 @@ model:
   _target_: transformers.AutoModelForCausalLM.from_pretrained
   pretrained_model_name_or_path: "itazap/blt-1b-hf"
   device_map: "auto"
+  load_in_8bit: true
 
 tokenizer:
   _target_: transformers.AutoTokenizer.from_pretrained

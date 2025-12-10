@@ -2,7 +2,8 @@ import os
 import hydra 
 import torch
 from peft import get_peft_model, LoraConfig
-from training_utils.utils import training_schedule, preprocess_data_hf, collate_fn
+from training_utils.utils import training_schedule, build_dataloader
+
 
 # Hydra configuration 
 @hydra.main(config_path="configs",
@@ -19,47 +20,66 @@ def main(cfg):
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+
+    #---------------- Get dataloaders ----------------
     # Get dataset parameters
     batch_size = cfg.dataset.batch_size
     seq_length = cfg.dataset.seq_length 
 
-    # Get dataset
-    train_dataset = hydra.utils.instantiate(cfg.dataset.train)
-    val_dataset = hydra.utils.instantiate(cfg.dataset.test)
-
-    # Get model & tokenizer
-    model = hydra.utils.instantiate(cfg.model.model)
+    # Get tokenizer 
     tokenizer = hydra.utils.instantiate(cfg.model.tokenizer)
+
+    # Get datasets
+    train_set = hydra.utils.instantiate(cfg.dataset.train)
+    validation_set = hydra.utils.instantiate(cfg.dataset.validation)
+    test_set = hydra.utils.instantiate(cfg.dataset.test)
+
+    # Get dataloaders
+    train_dataloader = build_dataloader(dataset=train_set,
+                                        tokenizer=tokenizer,
+                                        batch_size=batch_size,
+                                        seq_length=seq_length,
+                                        num_workers = 16,
+                                        shuffle=True,
+                                        drop_last=True,)
     
-    # Apply LoRa
+    validation_dataloader = build_dataloader(dataset=validation_set,
+                                        tokenizer=tokenizer,
+                                        batch_size=batch_size,
+                                        seq_length=seq_length,
+                                        num_workers = 16,
+                                        shuffle=True,
+                                        drop_last=True,)
+    
+    test_dataloader =  build_dataloader(dataset=test_set,
+                                        tokenizer=tokenizer,
+                                        batch_size=batch_size,
+                                        seq_length=seq_length,
+                                        num_workers = 16,
+                                        shuffle=True,
+                                        drop_last=True)
+    
+
+    #---------------- Get  model  ----------------
+    model = hydra.utils.instantiate(cfg.model.model)
+
+
+    # Apply LoRa 
     if cfg.lora.do_lora:
 
-        lora_cfg = LoraConfig(
-            r=cfg.lora.r,
-            lora_alpha=cfg.lora.lora_alpha,
-            lora_dropout=cfg.lora.lora_dropout,
-            bias=cfg.lora.bias,
-            target_modules=cfg.lora.target_modules,
-            task_type="CAUSAL_LM")
+        lora_cfg = LoraConfig(r=cfg.lora.r,
+                            lora_alpha=cfg.lora.lora_alpha,
+                            lora_dropout=cfg.lora.lora_dropout,
+                            bias=cfg.lora.bias,
+                            target_modules=cfg.lora.target_modules,
+                            task_type="CAUSAL_LM")
 
         model = get_peft_model(model, lora_cfg)
 
-    
-    # Add importance 
+
+    # Apply method 
     model = hydra.utils.instantiate(cfg.method.apply, model).to(device)
-
-    for _, p in model.model.named_parameters():
-        p.requires_grad = False
-
-
-    # Tokenize dataset
-    train_tokenized = preprocess_data_hf(train_dataset, tokenizer, seq_length)
-    val_tokenized = preprocess_data_hf(val_dataset, tokenizer, seq_length)
-
-    # Get dataloaders
-    train_dataloader = torch.utils.data.DataLoader(dataset=train_tokenized, shuffle=True, drop_last=True, batch_size=batch_size, num_workers = 16, collate_fn = collate_fn)
-    val_dataloader = torch.utils.data.DataLoader(dataset=val_tokenized, shuffle=False, batch_size=batch_size, num_workers = 16, collate_fn = collate_fn)
-
+       
     # Get optimizer
     optimizer = hydra.utils.instantiate(cfg.optimizer, params=model.parameters())
     
@@ -69,7 +89,7 @@ def main(cfg):
     os.makedirs(hydra_output_dir, exist_ok=True)
     
     # Train
-    training_schedule(model, train_dataloader, val_dataloader, optimizer, device, hydra_output_dir)
+    training_schedule(model, train_dataloader, validation_dataloader, optimizer, device, hydra_output_dir)
 
     return
 

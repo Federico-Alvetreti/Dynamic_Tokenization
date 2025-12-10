@@ -2,81 +2,117 @@ import os
 import json 
 import torch
 from tqdm import tqdm
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 
 
 # --------------Dataset processing functions--------------
+
+# Collate function to batch 
 def collate_fn(batch):
     return {
         "input_ids": torch.stack([x["input_ids"] for x in batch]),
         "attention_mask": torch.stack([x["attention_mask"] for x in batch]),
     }
 
-def preprocess_data_hf(dataset, tokenizer, seq_length = None,  group_size=8, num_proc=4):
-    """
-    Memory-efficient preprocessing for BLT.
-    Args:
-        dataset: Hugging Face dataset with "text" column
-        tokenizer: BLT tokenizer
-        max_length: int, tokenizer.model_max_length if None
-        group_size: int, BLT group size (default 8)
-        pad_token_id: int, default tokenizer.pad_token_id
-        num_proc: int, parallel processes for map
-    Returns:
-        tokenized and chunked Hugging Face dataset
-    """
-    # Get max length and pad token 
-    max_length = tokenizer.model_max_length
-    pad_token_id = tokenizer.pad_token_id
+# Tokenize a whole text dataset
+def tokenize_dataset(dataset, tokenizer):
+    print(f"Tokenizing Dataset")
+    def tokenize_fn(x):
+        return {"input_ids": tokenizer(x["text"], add_special_tokens=False)["input_ids"]}
 
-    # Seq length needs to be < max length and a multiple of group size
-    if (seq_length is None) or (seq_length > max_length) or (seq_length % group_size != 0):
-        seq_length = max_length
+    tokenized_dataset = dataset.map(
+                tokenize_fn,
+                batched=True,
+                batch_size=10000)
+    
+    return tokenized_dataset
 
-    # Tokenize each sample individually
-    def tokenize_fn(example):
-        tokens = tokenizer(example["text"], add_special_tokens=False)["input_ids"]
-        return {"input_ids": tokens}
+# Chunk each batch to a fixed sequence length 
+def chunk_tokenized_dataset(tokenized_dataset, seq_length, pad_token_id):
 
-    tokenized_data = dataset.map(tokenize_fn, batched=False, num_proc=num_proc)
-
-    # Flatten all tokens into chunks of seq_length
+    print(f"Chunking dataset in sequences of length {seq_length}")
     def chunk_fn(batch):
 
-        # Flatten list of tokens 
         all_tokens = sum(batch["input_ids"], [])
+        remainder = len(all_tokens) % seq_length
 
-        # Pad all_tokens to be a multiple of seq_length
-        rest = len(all_tokens) % seq_length
-        if rest != 0 :
-            all_tokens += [pad_token_id] * (seq_length - rest)
+        if remainder != 0:
+            all_tokens += [pad_token_id] * (seq_length - remainder)
 
-        # List of sequences
-        sequences = [all_tokens[i:i+seq_length] for i in range(0, len(all_tokens), seq_length)]
+        sequences = [all_tokens[i : i + seq_length] for i in range(0, len(all_tokens), seq_length)]
 
         return {"input_ids": sequences}
 
-    chunked_data = tokenized_data.map(chunk_fn, batched=True, batch_size=1000, remove_columns=tokenized_data.column_names)
+    chunked_dataset = tokenized_dataset.map(
+        chunk_fn,
+        batched=True,
+        batch_size=50,
+        remove_columns=tokenized_dataset.column_names)
     
-    return HFTokenizedDataset(chunked_data, pad_token_id)
+    return chunked_dataset
 
-class HFTokenizedDataset(Dataset):
-    def __init__(self, hf_dataset, pad_token_id):
-        self.dataset = hf_dataset
+# Standard Dataset that return input_ids and attention mask 
+class standard_dataset(Dataset):
+
+    def __init__(self, chunked_tokenized_dataset, pad_token_id):
+        self.dataset = chunked_tokenized_dataset
         self.pad_token_id = pad_token_id
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx):
+
+        # Return input_ids and attention_mask 
         input_ids = torch.tensor(self.dataset[idx]["input_ids"], dtype=torch.long)
         attention_mask = (input_ids != self.pad_token_id).long()
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask
-        }
-# --------------------------------------------------------
+        
+        return {"input_ids": input_ids,
+                "attention_mask": attention_mask}
 
+# Final function to build dataloader
+def build_dataloader(
+    dataset,
+    tokenizer,
+    batch_size,
+    seq_length=None,
+    group_size=8,
+    num_workers=16,
+    shuffle=True,
+    drop_last=False,
+):
+
+    max_length = tokenizer.model_max_length
+    pad_token_id = tokenizer.pad_token_id
+
+    # Validate seq_length
+    if (seq_length is None
+        or seq_length > max_length
+        or seq_length % group_size != 0
+    ):
+        seq_length = max_length
+
+    # Tokenization
+    tokenized_dataset = tokenize_dataset(dataset, tokenizer)
+
+    # Chunking
+    chunked_tokenized_dataset = chunk_tokenized_dataset(tokenized_dataset, seq_length, pad_token_id)
+
+    # Build Dataset
+    torch_dataset = standard_dataset(chunked_tokenized_dataset, pad_token_id)
+
+    # Build dataloader 
+    dataloader = DataLoader(
+        torch_dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=drop_last,
+        num_workers=num_workers,
+        collate_fn=collate_fn)
+
+    return dataloader
+
+# --------------------------------------------------------
 
 
 # Standard training phase 
@@ -107,6 +143,9 @@ def training_phase(model, train_data_loader, optimizer, device, plot):
         # Get batch loss
         loss = outputs.loss +  model.get_loss()
         train_loss += loss.detach().cpu().item()
+
+        # print("importance loss:", model.get_loss().detach().cpu().item())
+        # print("language modeling loss:", outputs.loss.detach().cpu().item())
 
         # Backpropagation
         loss.backward()

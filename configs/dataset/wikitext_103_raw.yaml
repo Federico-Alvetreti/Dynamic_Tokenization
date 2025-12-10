@@ -19,6 +19,6 @@ test:
   split: "test"
   cache_dir: ${core.dataset_path}
 
-batch_size: 128
-seq_length: 1024
+batch_size: 16
+seq_length: 128
 name: wikitext103_raw

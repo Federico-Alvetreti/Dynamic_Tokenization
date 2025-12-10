@@ -3,4 +3,4 @@ apply:
   alfa: ${..parameters.alfa}
 name : attention
 parameters:
-  alfa : 0.001
+  alfa : 0

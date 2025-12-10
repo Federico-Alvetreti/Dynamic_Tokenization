@@ -5,9 +5,9 @@ from typing import Optional
 from transformers.processing_utils import Unpack
 from transformers.cache_utils import Cache
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
-
-
-class BLT_Tranformer_Layer_Wrapper(nn.Module):
+from transformers import BltModel
+import math
+class BLT_Transformer_Layer_Wrapper(nn.Module):
     def __init__(self, original_layer):
         super().__init__()
         self.original_layer = original_layer
@@ -30,7 +30,6 @@ class BLT_Tranformer_Layer_Wrapper(nn.Module):
     ) -> tuple[torch.FloatTensor, Optional[tuple[torch.FloatTensor, torch.FloatTensor]]]:
 
         residual = hidden_states
-
         hidden_states = self.original_layer.input_layernorm(hidden_states)
 
         # Self Attention
@@ -61,60 +60,64 @@ class BLT_Tranformer_Layer_Wrapper(nn.Module):
         # Immediately free the huge tensor
         del self_attn_weights
 
-        print("ciao")
-
-
         return hidden_states
-    
 
 class Model_Wrapper(nn.Module):
 
     def __init__(self, model, alfa):
         super().__init__()
 
-        # Build model 
-        self.model = self.build_model(model)
+        # Store model and alfa  
+        self.model = model
         self.alfa = alfa
-        model.model.set_attn_implementation("eager")
 
-    # Create custom model 
-    def build_model(self,model):
-        # Wrap each layer 
-        for i in range(len(model.model.global_transformer.layers)) :
-            model.model.global_transformer.layers[i] = BLT_Tranformer_Layer_Wrapper(model.model.global_transformer.layers[i])
-        return model
-    
+        # Get the BltModel inside
+        self.blt_model = self._get_blt_model(model)
 
-    # Get entropy of a batch B x N -> B x 1
+        # Wrap layers
+        for i in range(len(self.blt_model.global_transformer.layers)):
+            self.blt_model.global_transformer.layers[i] = BLT_Transformer_Layer_Wrapper(self.blt_model.global_transformer.layers[i])
+
+        # Set attention implementation
+        self.model.model.set_attn_implementation("eager")
+
+    def _get_blt_model(self, model):
+        """Drill down to the BltModel, regardless of LoRA wrapping"""
+        base = model
+        while not isinstance(base, BltModel):
+            if hasattr(base, "model"):
+                base = base.model
+            else:
+                raise ValueError(f"Cannot find BltModel in {type(model)}")
+        return base
+
     def batch_entropy(self, batch):
+        # Compute entropy along token dimension (B x N -> B)
         batch_entropies = - (batch * batch.clamp(min=1e-12).log()).sum(dim=1)
-        return batch_entropies 
+        return batch_entropies
 
-
-    # Return the additional loss 
     def get_loss(self):
-        
-        # Stack the attentions from all layers (L, B, N)
-        all_layers_attentions = torch.stack([layer.average_attention for layer  in self.model.model.global_transformer.layers], dim=0) # 
-        
-        # Get the average layer attention (B, N)
-        average_attention = all_layers_attentions.mean(dim=0) 
+        # Stack attentions from all layers (L x B x N)
+        all_layers_attentions = torch.stack(
+            [layer.average_attention for layer in self.blt_model.global_transformer.layers],
+            dim=0)
 
-        # Get the entropy of each sample (B)
+        # Average over layers (B x N)
+        average_attention = all_layers_attentions.mean(dim=0)
+
+        # Entropy per sample (B)
         batch_entropies = self.batch_entropy(average_attention)
 
-        # Get the negative entropy (1)
+        # Negative entropy (scalar)
         loss = -batch_entropies.mean()
 
         # Scale by alfa
-        scaled_loss = self.alfa * loss
-
-        return scaled_loss
-
+        return self.alfa * loss
 
     # Standard forward 
-    def forward(self, input_ids, attention_mask, labels):
-        return self.model.forward(input_ids = input_ids,
-                                  attention_mask = attention_mask,
-                                  labels = labels,
-                                  output_attentions=True)
+    def forward(self, input_ids, attention_mask=None, labels=None):
+        return self.model.forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+            output_attentions=True)

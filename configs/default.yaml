@@ -2,9 +2,9 @@
 defaults:
   - dataset: wikitext_103_raw
   - model: blt_1b
-  - lora: none
+  - lora: standard
   - method: attention
-  - optimizer: adam
+  - optimizer: adafactor
 
 # Hyperparameters 
 hyperparameters:
