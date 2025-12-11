@@ -1,54 +1,78 @@
 import os
 import json 
 import torch
+import numpy as np 
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
+from itertools import chain
 
-
-# --------------Dataset processing functions--------------
+# --------------DATA PROCESSING --------------
 
 # Collate function to batch 
 def collate_fn(batch):
-    return {
-        "input_ids": torch.stack([x["input_ids"] for x in batch]),
-        "attention_mask": torch.stack([x["attention_mask"] for x in batch]),
-    }
+    input_ids = torch.stack([x["input_ids"] for x in batch], dim=0)
+    attention_mask = torch.stack([x["attention_mask"] for x in batch], dim=0)
+    return {"input_ids": input_ids, "attention_mask": attention_mask}
 
-# Tokenize a whole text dataset
-def tokenize_dataset(dataset, tokenizer):
-    print(f"Tokenizing Dataset")
-    def tokenize_fn(x):
-        return {"input_ids": tokenizer(x["text"], add_special_tokens=False)["input_ids"]}
+# ------------------ Optimized tokenization ------------------
+def tokenize_dataset(dataset, tokenizer, batch_size=10000, num_proc=8):
+    print("Tokenizing Dataset...")
+
+    example = dataset[0]
+    possible_keys = ["text", "Text", "content", "sentence"]
+
+    for k in possible_keys:
+        if k in example:
+            text_key = k
+            break
+    else:
+        raise KeyError(f"No text key found in batch: {batch.keys()}")
+
+
+    def tokenize_fn(batch):
+        texts = batch[text_key]
+        input_ids = [
+            torch.tensor(tokenizer(t, add_special_tokens=False)["input_ids"], dtype=torch.long)
+            for t in texts
+        ]
+        return {"input_ids": input_ids}
 
     tokenized_dataset = dataset.map(
-                tokenize_fn,
-                batched=True,
-                batch_size=10000)
-    
+        tokenize_fn,
+        batched=True,
+        batch_size=batch_size,
+        num_proc=num_proc,
+    )
+
     return tokenized_dataset
 
-# Chunk each batch to a fixed sequence length 
-def chunk_tokenized_dataset(tokenized_dataset, seq_length, pad_token_id):
+# ------------------ Optimized chunking ------------------
+def chunk_tokenized_dataset(tokenized_dataset, seq_length, pad_token_id, batch_size=1000, num_proc=8):
+    print(f"Chunking dataset in sequences of length {seq_length}...")
 
-    print(f"Chunking dataset in sequences of length {seq_length}")
     def chunk_fn(batch):
-
-        all_tokens = sum(batch["input_ids"], [])
+        # Flatten the list of tensors efficiently
+        all_tokens = np.concatenate([np.array(ids, dtype=np.int32) for ids in batch["input_ids"]])
+        
+        # Pad to multiple of seq_length
         remainder = len(all_tokens) % seq_length
-
         if remainder != 0:
-            all_tokens += [pad_token_id] * (seq_length - remainder)
+            all_tokens = np.pad(all_tokens, (0, seq_length - remainder), constant_values=pad_token_id)
+        
+        # Reshape into (num_sequences, seq_length)
+        sequences = all_tokens.reshape(-1, seq_length)
 
-        sequences = [all_tokens[i : i + seq_length] for i in range(0, len(all_tokens), seq_length)]
-
-        return {"input_ids": sequences}
+        # Return as list of lists for datasets compatibility
+        return {"input_ids": sequences.tolist()}
 
     chunked_dataset = tokenized_dataset.map(
         chunk_fn,
         batched=True,
-        batch_size=50,
-        remove_columns=tokenized_dataset.column_names)
-    
+        batch_size=batch_size,
+        num_proc=num_proc,
+        remove_columns=tokenized_dataset.column_names,
+    )
+
     return chunked_dataset
 
 # Standard Dataset that return input_ids and attention mask 
@@ -79,8 +103,7 @@ def build_dataloader(
     group_size=8,
     num_workers=16,
     shuffle=True,
-    drop_last=False,
-):
+    drop_last=False,):
 
     max_length = tokenizer.model_max_length
     pad_token_id = tokenizer.pad_token_id
@@ -108,12 +131,12 @@ def build_dataloader(
         shuffle=shuffle,
         drop_last=drop_last,
         num_workers=num_workers,
+        pin_memory=True,
         collate_fn=collate_fn)
 
     return dataloader
 
-# --------------------------------------------------------
-
+# -------------TRAINING SCHEDULE / EVALUATION --------------------
 
 # Standard training phase 
 def training_phase(model, train_data_loader, optimizer, device, plot):
@@ -122,7 +145,8 @@ def training_phase(model, train_data_loader, optimizer, device, plot):
         print("\nTraining phase:")
 
     # Initialize train loss 
-    train_loss = 0.0
+    train_task_loss = 0.0
+    train_importance_loss = 0.0
 
     # Set the model in training mode
     model.train()
@@ -131,8 +155,8 @@ def training_phase(model, train_data_loader, optimizer, device, plot):
     for batch in tqdm(train_data_loader, disable=not plot):
 
         # Get input ids and attention mask
-        input_ids = batch["input_ids"].to(device)
-        attention_mask = batch.get("attention_mask", None).to(device)
+        input_ids = batch["input_ids"].to(device, non_blocking=True)
+        attention_mask = batch.get("attention_mask", None).to(device,non_blocking=True)
         
         # Forward 
         outputs = model(
@@ -140,29 +164,34 @@ def training_phase(model, train_data_loader, optimizer, device, plot):
             attention_mask=attention_mask,
             labels=input_ids)
         
-        # Get batch loss
-        loss = outputs.loss +  model.get_loss()
-        train_loss += loss.detach().cpu().item()
 
-        # print("importance loss:", model.get_loss().detach().cpu().item())
-        # print("language modeling loss:", outputs.loss.detach().cpu().item())
+        # Get full loss 
+        loss = outputs.loss +  model.get_loss()
 
         # Backpropagation
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
 
-    avg_train_loss = train_loss / len(train_data_loader)
+        # Store single losses
+        train_task_loss += outputs.loss.detach().cpu().item()
+        train_importance_loss += model.get_loss().detach().cpu().item()
+
+
+    # Average losses 
+    avg_train_task_loss = train_task_loss / len(train_data_loader)
+    avg_train_importance_loss = train_importance_loss / len(train_data_loader)
     
-    return avg_train_loss
+    return avg_train_task_loss, avg_train_importance_loss
 
 # Standard validation phase
 def validation_phase(model, val_data_loader, device, plot):
     if plot:
         print("\nValidation phase:")
 
-    # Initialize val  loss 
-    val_loss = 0.0
+    # Initialize val loss 
+    val_task_loss = 0.0
+    val_importance_loss = 0.0
 
     # Set the model in eval mode
     model.eval()
@@ -182,12 +211,15 @@ def validation_phase(model, val_data_loader, device, plot):
                 labels=input_ids
             )
 
-            # Get batch loss
-            loss = outputs.loss
-            val_loss += loss.cpu().item()
+            # Store single losses
+            val_task_loss += outputs.loss.detach().cpu().item()
+            val_importance_loss += model.get_loss().detach().cpu().item()
 
-    avg_val_loss = val_loss / len(val_data_loader)
-    return avg_val_loss
+    # Average losses 
+    avg_val_task_loss = val_task_loss / len(val_data_loader)
+    avg_val_importance_loss = val_importance_loss / len(val_data_loader)
+
+    return avg_val_task_loss, avg_val_importance_loss
 
 # Standard training schedule
 def training_schedule(model,
@@ -197,12 +229,12 @@ def training_schedule(model,
                       device,
                       hydra_output_dir,
                       patience=5,
-                      max_epochs=1000,
+                      max_epochs=50,
                       plot=True,
                       save_model=True):
 
     # Init Results
-    train_losses, val_losses = [], []
+    train_task_losses, train_importance_losses, val_task_losses, val_importance_losses = [], [], [], []
     results_file = os.path.join(hydra_output_dir, "training_results.json")
 
     # Set patience 
@@ -215,18 +247,25 @@ def training_schedule(model,
             print(f"\n\nEPOCH {epoch}")
 
         # Get losses
-        avg_train_loss = training_phase(model, train_data_loader, optimizer, device, plot)
-        avg_val_loss = validation_phase(model, val_data_loader, device, plot)
+        avg_train_task_loss, avg_train_importance_loss = training_phase(model, train_data_loader, optimizer, device, plot)
+        avg_val_task_loss, avg_val_importance_loss = validation_phase(model, val_data_loader, device, plot)
+
+        # Get the avg_val_loss 
+        avg_val_loss = avg_val_task_loss + avg_val_importance_loss
 
         # Store them
-        train_losses.append(avg_train_loss)
-        val_losses.append(avg_val_loss)
-
-        if plot:
-            print(f"\nTrain loss: {avg_train_loss:.4f}; Val loss: {avg_val_loss:.4f}")
+        train_task_losses.append(avg_train_task_loss)
+        train_importance_losses.append(avg_train_importance_loss)
+        val_task_losses.append(avg_val_task_loss)
+        val_importance_losses.append(avg_val_importance_loss)
+        
 
         # Save results
-        results = {"Train losses": train_losses, "Val losses": val_losses}
+        results = {"Train task losses": train_task_losses,
+                    "Train importance losses": train_importance_losses,
+                    "Val task losses": val_task_losses,
+                    "val importance losses": val_importance_losses}
+
         os.makedirs(hydra_output_dir, exist_ok=True)
         with open(results_file, "w") as f:
             json.dump(results, f, indent=4)
@@ -245,3 +284,16 @@ def training_schedule(model,
             if plot:
                 print(f"Stopping early at epoch {epoch} due to patience.")
             break
+
+
+# def evaluate(model, tokenizer, test_dataloader, device, hydra_output_dir, plot = False)
+
+#     # Test evaluation 
+#     avg_test_task_loss, avg_test_importance_loss = validation_phase(model, test_dataloader, device, plot)
+
+#     # Tokenization quality 
+#     #
+#     # Now here i would like to take a few test samples (first 10?) and see the tokenization !
+#     #
+#     #
+#     #

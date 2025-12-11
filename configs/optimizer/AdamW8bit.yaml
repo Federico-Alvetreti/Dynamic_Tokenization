@@ -1,0 +1,3 @@
+_target_: bitsandbytes.optim.PagedAdamW8bit
+lr: 2e-5
+weight_decay: 0.01

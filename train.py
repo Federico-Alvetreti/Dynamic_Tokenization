@@ -14,6 +14,13 @@ from training_utils.utils import training_schedule, build_dataloader
 
 def main(cfg):
 
+    # Set offline mode 
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
+    os.environ["HYDRA_FULL_ERROR"] = "1"
+
+
     # Set seed 
     torch.manual_seed(cfg.hyperparameters.seed) 
 
@@ -26,7 +33,7 @@ def main(cfg):
     batch_size = cfg.dataset.batch_size
     seq_length = cfg.dataset.seq_length 
 
-    # Get tokenizer 
+    # # Get tokenizer 
     tokenizer = hydra.utils.instantiate(cfg.model.tokenizer)
 
     # Get datasets
@@ -39,7 +46,7 @@ def main(cfg):
                                         tokenizer=tokenizer,
                                         batch_size=batch_size,
                                         seq_length=seq_length,
-                                        num_workers = 16,
+                                        num_workers = 8,
                                         shuffle=True,
                                         drop_last=True,)
     
@@ -47,7 +54,7 @@ def main(cfg):
                                         tokenizer=tokenizer,
                                         batch_size=batch_size,
                                         seq_length=seq_length,
-                                        num_workers = 16,
+                                        num_workers = 8,
                                         shuffle=True,
                                         drop_last=True,)
     
@@ -55,7 +62,7 @@ def main(cfg):
                                         tokenizer=tokenizer,
                                         batch_size=batch_size,
                                         seq_length=seq_length,
-                                        num_workers = 16,
+                                        num_workers = 8,
                                         shuffle=True,
                                         drop_last=True)
     
@@ -90,6 +97,7 @@ def main(cfg):
     
     # Train
     training_schedule(model, train_dataloader, validation_dataloader, optimizer, device, hydra_output_dir)
+
 
     return
 

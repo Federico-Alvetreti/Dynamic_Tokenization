@@ -1,0 +1,21 @@
+train:
+  _target_: datasets.load_dataset
+  path: "Trelis/tiny-shakespeare"
+  split: "train"
+  cache_dir: ${core.dataset_path}
+
+validation:
+  _target_: datasets.load_dataset
+  path: "Trelis/tiny-shakespeare"
+  split: "test[:50%]" 
+  cache_dir: ${core.dataset_path}
+
+test:
+  _target_: datasets.load_dataset
+  path: "Trelis/tiny-shakespeare"
+  split: "test[50%:]"
+  cache_dir: ${core.dataset_path}
+
+batch_size: 32
+seq_length: 256
+name: tinyshakespeare

@@ -1,0 +1,8 @@
+# Check how many hours u got 
+ saldo -b -u $falvetre
+
+# Check works
+squeue -u falvetre
+
+# 10m Interactive mode 
+srun -A IscrC_ELLIF-HE -p boost_usr_prod --time 00:10:00 -N 1 --ntasks-per-node=1 --cpus-per-task=8 --gres=gpu:1 --pty /bin/bash

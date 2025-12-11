@@ -4,9 +4,12 @@ model:
   _target_: transformers.AutoModelForCausalLM.from_pretrained
   pretrained_model_name_or_path: "itazap/blt-1b-hf"
   device_map: "auto"
+  cache_dir: ${core.models_path}
   load_in_8bit: true
+  local_files_only: true
 
 tokenizer:
   _target_: transformers.AutoTokenizer.from_pretrained
   pretrained_model_name_or_path: "itazap/blt-1b-hf"
-
+  cache_dir: ${core.models_path}
+  local_files_only: true

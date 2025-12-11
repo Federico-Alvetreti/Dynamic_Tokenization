@@ -4,6 +4,7 @@ train:
   name: "wikitext-103-raw-v1"
   split: "train"
   cache_dir: ${core.dataset_path}
+  download_mode: reuse_dataset_if_exists
 
 validation:
   _target_: datasets.load_dataset
@@ -11,6 +12,7 @@ validation:
   name: "wikitext-103-raw-v1"
   split: "validation"
   cache_dir: ${core.dataset_path}
+  download_mode: reuse_dataset_if_exists
 
 test:
   _target_: datasets.load_dataset
@@ -18,7 +20,8 @@ test:
   name: "wikitext-103-raw-v1"
   split: "test"
   cache_dir: ${core.dataset_path}
+  download_mode: reuse_dataset_if_exists
 
-batch_size: 16
+batch_size: 64
 seq_length: 128
 name: wikitext103_raw

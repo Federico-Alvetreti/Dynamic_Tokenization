@@ -1,21 +1,24 @@
 # Default Configurations 
 defaults:
-  - dataset: wikitext_103_raw
+  - _self_
+  - dataset: tinyshakespeare
   - model: blt_1b
   - lora: standard
   - method: attention
-  - optimizer: adafactor
+  - optimizer: AdamW8bit
 
 # Hyperparameters 
 hyperparameters:
+  storage_path: /leonardo_scratch/fast/IscrC_ELLIF-HE/federicoalvetreti
   experiment_name : prova
-  seed: 331
+  seed: 332
 
 # Set folders for results, datasets and plots 
 core:
-  dataset_path: ./data
-  results_path: ./results
-  plots_path : ./plots
+  dataset_path: ${hyperparameters.storage_path}/data
+  models_path: ${hyperparameters.storage_path}/models
+  results_path: ${hyperparameters.storage_path}/results
+  plots_path : ${hyperparameters.storage_path}/plots
 
 
 # Set default Hydra folder name 

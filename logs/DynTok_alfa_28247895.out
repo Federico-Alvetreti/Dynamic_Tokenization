@@ -1,0 +1,6 @@
+Job started on lrdn3292.leonardo.local at Thu Dec 11 10:49:12 CET 2025
+Job ID: 28247895
+Loading cuda/12.2
+  Loading requirement: libiconv/1.17-nhc3mhm xz/5.4.6-xxxg42c
+    zlib-ng/2.1.6-jkgunjc libxml2/2.10.3-zbbe7lm
+Running train.py with alfa=0.001
